@@ -8,8 +8,10 @@ const NAV_ITEMS = [
   { id: 'cinemas', label: 'Cinemas & Screens' },
   { id: 'payments', label: 'Payments' },
   { id: 'concessions', label: 'Concessions Inventory' },
-  { id: 'schema', label: 'DBMS Schema Explorer' }
+  { id: 'schema', label: 'DBMS Schema Explorer' },
+  { id: 'sqlsync', label: 'MySQL Workbench Sync' }
 ];
+
 
 export default function Sidebar({ activeTab, onSelectTab, onResetDb }) {
   return (

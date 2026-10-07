@@ -8,6 +8,7 @@ import CinemasView from './components/CinemasView';
 import PaymentsView from './components/PaymentsView';
 import ConcessionsView from './components/ConcessionsView';
 import SchemaView from './components/SchemaView';
+import SqlSyncView from './components/SqlSyncView';
 import { dbms } from './db/dbmsService';
 
 const TAB_METADATA = {
@@ -42,8 +43,13 @@ const TAB_METADATA = {
   schema: {
     title: 'DBMS Relational Schema Explorer',
     desc: 'Normalized 3NF relational tables and key constraints from the source specification.'
+  },
+  sqlsync: {
+    title: 'Real-time MySQL Workbench File & Queries',
+    desc: 'Direct synchronization with cinema_screening_dbms.sql. Run DDL, DML and analytical queries directly in MySQL Workbench.'
   }
 };
+
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('reporting');
@@ -61,6 +67,15 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
+  // Reactive reload whenever data is loaded from SQL file or updated
+  useEffect(() => {
+    const unsub = dbms.onDataChange(() => {
+      setDbVersion(v => v + 1);
+    });
+    return unsub;
+  }, []);
+
+
   const toggleTheme = () => {
     const nextTheme = theme === 'oled' ? 'light' : 'oled';
     setTheme(nextTheme);
@@ -71,10 +86,11 @@ export default function App() {
     }
   };
 
-  const handleResetDb = () => {
-    dbms.resetDatabase();
+  const handleResetDb = async () => {
+    await dbms.resetDatabase();
     setDbVersion(v => v + 1);
   };
+
 
   const handleSelectScreeningForBooking = (screeningId) => {
     setBookingScreeningId(screeningId);
@@ -126,8 +142,10 @@ export default function App() {
           {activeTab === 'payments' && <PaymentsView />}
           {activeTab === 'concessions' && <ConcessionsView />}
           {activeTab === 'schema' && <SchemaView />}
+          {activeTab === 'sqlsync' && <SqlSyncView />}
         </section>
       </main>
     </div>
   );
 }
+

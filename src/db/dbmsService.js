@@ -1,10 +1,107 @@
 import { initialData } from './initialData';
+import { generateMySQLDump } from './sqlDumpGenerator';
+import { parseSqlDump } from './sqlParser';
 
 const STORAGE_KEY = 'cinema_screening_dbms_data_inr_v2';
 
 class DBMSService {
   constructor() {
+    this.syncListeners = new Set();
+    this.dataChangeListeners = new Set();
+    this.isLoadedFromSql = false;
     this.data = this.loadData();
+
+    // Asynchronously fetch current SQL file from server to ensure 100% data fidelity with cinema_screening_dbms.sql
+    this.initFromSqlFile();
+
+    // Auto-reload when cinema_screening_dbms.sql is modified externally (e.g., in Workbench or editor)
+    if (import.meta.hot) {
+      import.meta.hot.on('sql-file-changed', () => {
+        console.log('[DBMS] External modification to cinema_screening_dbms.sql detected. Pulling changes...');
+        this.reloadFromSqlFile();
+      });
+    }
+  }
+
+
+  onDataChange(callback) {
+    this.dataChangeListeners.add(callback);
+    return () => this.dataChangeListeners.delete(callback);
+  }
+
+  notifyDataChange() {
+    this.dataChangeListeners.forEach(cb => {
+      try {
+        cb(this.data);
+      } catch {
+        // ignore
+      }
+    });
+  }
+
+  onSyncChange(callback) {
+    this.syncListeners.add(callback);
+    return () => this.syncListeners.delete(callback);
+  }
+
+  notifySyncStatus(status) {
+    this.syncListeners.forEach(cb => {
+      try {
+        cb(status);
+      } catch {
+        // ignore listener errors
+      }
+    });
+  }
+
+  async initFromSqlFile() {
+    try {
+      const res = await fetch('/api/sql');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.exists && json.content) {
+          const parsed = parseSqlDump(json.content);
+          if (parsed.movies && parsed.movies.length > 0) {
+            this.data = parsed;
+            this.isLoadedFromSql = true;
+            this.notifyDataChange();
+            this.notifySyncStatus({ status: 'synced', timestamp: new Date(), source: 'sql_file' });
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Initial SQL fetch not available, falling back to local state:', err.message);
+    }
+    // If SQL file wasn't loaded from server yet, synchronize current state
+    this.syncSqlFile();
+  }
+
+  async syncSqlFile() {
+    try {
+      const sql = generateMySQLDump(this.data);
+      this.lastGeneratedSql = sql;
+      this.notifySyncStatus({ status: 'syncing', timestamp: new Date() });
+
+      const res = await fetch('/api/sql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sql })
+      });
+      if (res.ok) {
+        this.notifySyncStatus({ status: 'synced', timestamp: new Date(), length: sql.length });
+      } else {
+        this.notifySyncStatus({ status: 'error', error: `Server status: ${res.status}` });
+      }
+    } catch (err) {
+      // In offline / preview / static mode, log warning but keep state consistent
+      console.warn('Real-time SQL sync server endpoint not reachable:', err.message);
+      this.notifySyncStatus({ status: 'offline', error: err.message });
+    }
+  }
+
+  getSqlDump() {
+    return generateMySQLDump(this.data);
   }
 
   loadData() {
@@ -25,13 +122,60 @@ class DBMSService {
     } catch {
       // Handle storage quota if needed
     }
+    this.notifyDataChange();
+    // Real-time synchronization to cinema_screening_dbms.sql
+    this.syncSqlFile();
   }
 
-  resetDatabase() {
+  async reloadFromSqlFile() {
+    try {
+      const res = await fetch('/api/sql');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.content) {
+          const parsed = parseSqlDump(json.content);
+          if (parsed.movies && parsed.movies.length > 0) {
+            this.data = parsed;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+            this.notifyDataChange();
+            this.notifySyncStatus({ status: 'synced', timestamp: new Date(), source: 'reloaded_from_sql' });
+            return { success: true };
+          }
+        }
+      }
+    } catch (err) {
+      throw new Error(`Failed to reload from SQL: ${err.message}`);
+    }
+    return { success: false };
+  }
+
+  async resetDatabase() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      const res = await fetch('/api/sql');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.content) {
+          const parsed = parseSqlDump(json.content);
+          if (parsed.movies && parsed.movies.length > 0) {
+            this.data = parsed;
+            this.saveData();
+            this.notifyDataChange();
+            return this.data;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Could not reset strictly from /api/sql, using fallback:', err.message);
+    }
     this.data = JSON.parse(JSON.stringify(initialData));
     this.saveData();
+    this.notifyDataChange();
     return this.data;
   }
+
+
+
 
   // --- ENTITY GETTERS ---
   getCinemas() { return this.data.cinemas; }
